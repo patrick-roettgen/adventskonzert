@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Einlass · Chor Aufbruch</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10191d;color:#e7eff2;font:17px/1.4 system-ui,-apple-system,sans-serif;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+[hidden]{display:none!important}.wrap{max-width:560px;margin:0 auto;padding:12px}
+h1{font-size:1.1rem;margin:4px 0 10px;color:#7fd0d4}
+video{width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;object-fit:cover}
+input{width:100%;padding:12px;border-radius:10px;border:1px solid #2b3d45;background:#18252b;color:inherit;font:inherit}
+.btn{display:block;width:100%;margin-top:8px;padding:14px;border:0;border-radius:12px;background:#48b5ba;color:#08242a;font:inherit;font-weight:700;cursor:pointer}
+.btn.ghost{background:none;color:inherit;border:2px solid #2b3d45}
+#res{border-radius:16px;padding:18px;margin:10px 0;color:#fff}
+#res.green{background:#1b7a4a}#res.red{background:#b3261e}#res.amber{background:#a15c00}
+#res h2{margin:0 0 6px;font-size:1.6rem}#res p{margin:2px 0}.big{font-size:1.25rem;font-weight:700}
+.item{display:flex;justify-content:space-between;gap:8px;padding:12px;margin-top:6px;border:1px solid #2b3d45;border-radius:10px;background:#18252b;cursor:pointer}
+.dot{font-weight:700}.mute{color:#9db0b8;font-size:.85rem}
+</style></head>
+<body><div class="wrap">
+<h1>Einlasskontrolle · Adventskonzert</h1>
+
+<div id="login" hidden><p>Zugangscode eingeben:</p><input id="pin" type="password" autocomplete="off"><button class="btn" id="pinok">Anmelden</button></div>
+
+<div id="main" hidden>
+  <video id="v" playsinline muted></video>
+  <div id="res" hidden></div>
+  <button class="btn" id="ok" hidden>Einlass bestätigen</button>
+  <button class="btn ghost" id="next" hidden>Nächster Gast</button>
+  <p class="mute" style="margin:14px 0 4px">Kein QR-Code? Name oder Ticket-Nr. suchen (z. B. Abendkasse):</p>
+  <input id="q" placeholder="Name oder Ticket-Nr." autocomplete="off">
+  <div id="list"></div>
+  <p class="mute" id="msg"></p>
+</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>
+const API='https://script.google.com/macros/s/AKfycbzwjsn3q_gkOVCIghZ4ol8EYRgfLedBhX_jGhzknZ0kDKRyYGiqwDUCO3P5RvFVrFy43w/exec'; // <- hier die Web-App-URL des Apps Scripts eintragen (dieselbe wie in der Ticketseite)
+const DAYS={'2026-12-12':'Sa 12.12.','2026-12-13':'So 13.12.'};
+const $=s=>document.querySelector(s);
+let key='';try{key=localStorage.getItem('ab_key')||''}catch(e){}
+let busy=false,cur=null,today='';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(q){const u=new URL(API);Object.entries({...q,key}).forEach(([k,v])=>u.searchParams.set(k,v));return(await fetch(u)).json()}
+async function post(o){return(await fetch(API,{method:'POST',body:JSON.stringify({...o,key})})).json()}
+const say=t=>$('#msg').textContent=t||'';
+
+function init(){
+  if(!API){$('#main').hidden=true;$('#login').hidden=false;$('#login').innerHTML='<p>Bitte zuerst die Web-App-URL im Code (API) eintragen.</p>';return}
+  if(!key){$('#login').hidden=false;$('#main').hidden=true;return}
+  $('#login').hidden=true;$('#main').hidden=false;camera();
+}
+$('#pinok').onclick=()=>{key=$('#pin').value.trim();try{localStorage.setItem('ab_key',key)}catch(e){}init()};
+
+function view(g){
+  cur=g;busy=true;
+  const day=DAYS[g.day]||g.day,wrongDay=today&&g.day!==today;
+  const pers=[g.a?g.a+' Erw.':'',g.k?g.k+' Kinder/Jug.':''].filter(Boolean).join(' + ');
+  let cls,head,sub='';
+  if(!g.paid){cls='red';head='✗ NICHT BEZAHLT';sub=`Offen: ${g.sum} €`}
+  else if(g.inAt){cls='amber';head='⚠ BEREITS EINGELASSEN';sub=`um ${g.inAt} Uhr`}
+  else{cls='green';head='✓ BEZAHLT – Einlass OK'}
+  if(wrongDay&&cls==='green')cls='amber';
+  $('#res').className=cls;$('#res').hidden=false;
+  $('#res').innerHTML=`<h2>${head}</h2><p class="big">${esc(g.name)}</p><p>${pers} · ${day}</p><p>${g.ship==='door'?'Abendkasse':'E-Mail-Ticket'} · Nr. ${g.id}</p>${sub?`<p>${sub}</p>`:''}${wrongDay?`<p class="big">⚠ Gilt für ${day}, heute ist ${DAYS[today]||today}</p>`:''}`;
+  $('#ok').hidden=!(g.paid&&!g.inAt);$('#next').hidden=false;
+  if(navigator.vibrate)navigator.vibrate(g.paid&&!g.inAt?60:[80,60,80]);
+}
+function reset(){cur=null;busy=false;$('#res').hidden=true;$('#ok').hidden=true;$('#next').hidden=true;$('#list').innerHTML='';$('#q').value='';say('')}
+$('#next').onclick=reset;
+$('#ok').onclick=async()=>{
+  $('#ok').disabled=true;say('Speichere …');
+  try{const r=await post({action:'checkin',id:cur.id});
+    if(r.ok&&r.done){reset();$('#res').hidden=false;$('#res').className='green';$('#res').innerHTML=`<h2>✓ Eingelassen</h2><p>${esc(r.g.name)}</p>`;busy=false;setTimeout(()=>{if(!cur)$('#res').hidden=true},2500)}
+    else if(r.ok)view(r.g);else say('Fehler beim Speichern.')}
+  catch(e){say('Keine Verbindung – bitte erneut versuchen.')}
+  $('#ok').disabled=false;
+};
+async function lookup(id){
+  say('Prüfe …');
+  try{const r=await api({action:'find',id});
+    if(r.error==='key'){key='';try{localStorage.removeItem('ab_key')}catch(e){}init();return}
+    if(r.ok){today=r.today;say('');view(r.g)}
+    else{busy=true;$('#res').className='red';$('#res').hidden=false;$('#res').innerHTML='<h2>✗ UNBEKANNT</h2><p>Ticket-Nr. nicht gefunden.</p>';$('#next').hidden=false;say('')}}
+  catch(e){busy=false;say('Keine Verbindung zum Anmeldesystem.')}
+}
+let t;$('#q').oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{
+  const q=$('#q').value.trim();if(q.length<2){$('#list').innerHTML='';return}
+  try{const r=await api({action:'search',q});if(!r.ok)return;today=r.today;
+    $('#list').innerHTML=r.list.map((g,i)=>`<div class="item" data-i="${i}"><span>${esc(g.name)}<br><small class="mute">${DAYS[g.day]||g.day} · ${g.a}+${g.k} · ${g.id}</small></span><span class="dot">${!g.paid?'🔴 offen':g.inAt?'🟠 drin':'🟢 bezahlt'}</span></div>`).join('')||'<p class="mute">Nichts gefunden.</p>';
+    $('#list').onclick=e=>{const d=e.target.closest('.item');if(d)view(r.list[d.dataset.i])}}
+  catch(e){say('Keine Verbindung.')}},300)};
+
+// Kamera + QR-Erkennung
+async function camera(){
+  const v=$('#v'),cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});
+  try{v.srcObject=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});await v.play()}
+  catch(e){say('Kamera nicht verfügbar – bitte Zugriff erlauben (HTTPS nötig) oder Suche nutzen.');return}
+  (function tick(){
+    if(!busy&&v.readyState===v.HAVE_ENOUGH_DATA){cv.width=v.videoWidth;cv.height=v.videoHeight;cx.drawImage(v,0,0);
+      const d=cx.getImageData(0,0,cv.width,cv.height),c=jsQR(d.data,d.width,d.height);
+      if(c&&c.data.indexOf('AUFBRUCH|')===0){busy=true;lookup(c.data.split('|')[1])}}
+    requestAnimationFrame(tick)})();
+}
+init();
+</script></body></html>
